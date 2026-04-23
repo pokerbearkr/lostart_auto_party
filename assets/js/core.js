@@ -81,6 +81,41 @@ async function fetchSiblings(characterName) {
   return data;
 }
 
+/**
+ * 단일 캐릭터의 전투력을 가져온다.
+ * /armories/characters/{name}?filters=profiles 요청 후 ArmoryProfile.CombatPower 추출.
+ * 실패 시 null 반환 (호출측에서 템레벨만 써서 폴백).
+ */
+async function fetchCombatPower(characterName) {
+  if (!state.apiKey) return null;
+  const url = `${API_BASE}/armories/characters/${encodeURIComponent(characterName)}?filters=profiles`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'accept': 'application/json',
+        'authorization': `bearer ${state.apiKey}`,
+      },
+    });
+    if (!res.ok) {
+      if (res.status === 429) throw new Error('RATE_LIMIT');
+      return null;
+    }
+    const data = await res.json();
+    if (!data || !data.ArmoryProfile) return null;
+    // CombatPower는 "3,492.58" 같은 문자열이거나 숫자로 옴
+    const cp = data.ArmoryProfile.CombatPower;
+    if (cp == null) return null;
+    return parseItemLevel(cp); // 쉼표 제거 + parseFloat
+  } catch (e) {
+    if (e.message === 'RATE_LIMIT') throw e;
+    return null;
+  }
+}
+
+// 호출 간격 조절 (분당 100회 제한 대응: 호출당 100ms = 분당 600회 이하지만 넉넉히 150ms)
+const API_DELAY_MS = 150;
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
 function parseItemLevel(levelStr) {
   if (typeof levelStr === 'number') return levelStr;
   if (!levelStr) return 0;
@@ -94,15 +129,51 @@ function normalizeCharacters(apiCharacters, repName) {
     server: c.ServerName,
     className: c.CharacterClassName,
     level: parseItemLevel(c.ItemMaxLevel || c.ItemAvgLevel),
+    combatPower: 0, // 전투력 - addRoster에서 armories API로 별도 채움
     isSupport: isSupport(c.CharacterClassName),
     rosterRep: repName,
   }));
 }
 
 // ─── 원정대 관리 ───
-async function addRoster(characterName) {
+/**
+ * 캐릭터 하나를 기준으로 원정대 전체를 불러온다.
+ * 1단계: siblings API로 모든 캐릭터 목록 + 템레벨 가져오기
+ * 2단계: 각 캐릭터의 armories API를 순차 호출하여 전투력 채우기
+ *
+ * onProgress(current, total, msg): 진행도 콜백 (선택)
+ */
+async function addRoster(characterName, onProgress) {
+  // 1) 원정대 목록
+  if (onProgress) onProgress(0, 1, '원정대 목록 불러오는 중...');
   const siblings = await fetchSiblings(characterName);
   const chars = normalizeCharacters(siblings, characterName);
+
+  // 2) 각 캐릭터 전투력 조회 (순차 호출, 레이트 리밋 대응)
+  const total = chars.length;
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i];
+    if (onProgress) onProgress(i + 1, total, `전투력 조회: ${ch.name}`);
+    try {
+      const cp = await fetchCombatPower(ch.name);
+      ch.combatPower = cp || 0;
+    } catch (e) {
+      if (e.message === 'RATE_LIMIT') {
+        // 레이트 리밋 히트 - 10초 대기 후 재시도 1번
+        if (onProgress) onProgress(i + 1, total, '호출 한도 초과, 10초 대기...');
+        await sleep(10000);
+        try {
+          const cp = await fetchCombatPower(ch.name);
+          ch.combatPower = cp || 0;
+        } catch (_) {
+          ch.combatPower = 0;
+        }
+      }
+    }
+    if (i < chars.length - 1) await sleep(API_DELAY_MS);
+  }
+
+  // 3) 저장
   const idx = state.rosters.findIndex(r => r.repName === characterName);
   const roster = { repName: characterName, characters: chars, fetchedAt: Date.now() };
   if (idx >= 0) state.rosters[idx] = roster;
@@ -171,24 +242,23 @@ function getAllCharacters() {
 /**
  * 특정 레이드에 맞는 파티를 자동 구성한다.
  *
- * 주요 제약:
- *  (1) 레벨 구간 [minLevel, maxLevel) 에 해당하는 캐릭터만 후보
- *  (2) 한 파티에 같은 원정대(rosterRep) 캐릭은 1명만 (로스트아크 실제 입장 제약)
- *  (3) 4인 파티 = 서포터 1 + 딜러 3 (또는 서포터 부족시 딜러 4)
+ * 설계 원칙:
+ *  (1) 입장 가능 여부: 아이템 레벨 기준 [minLevel, maxLevel) 필터
+ *  (2) 파티 균형: 전투력(combatPower) 기준 snake-draft
+ *  (3) 한 파티에 같은 원정대(rosterRep) 1명만 (로스트아크 실제 입장 제약)
+ *  (4) 4인 파티 = 서포터 1 + 딜러 3 (또는 서포터 부족 시 딜러 4)
  *
- * 생성 파티 수:
- *  - 4인 레이드 (partySize=4) → 최대 1개
- *  - 8인 레이드 (partySize=8) → 4인 파티 최대 2개
- *  - 프리셋에 없는 값도 4인 파티 단위로 계산 (partySize / 4)
+ * 공격대(raidGroup) 단위:
+ *  - 4인 레이드(partySize=4): 1공격대 = 파티 1개
+ *  - 8인 레이드(partySize=8): 1공격대 = 파티 2개
  *
- * 알고리즘 (원정대 중복 제한을 만족하면서 평균 균등 분배):
- *  1) 딜러/서포터 분리 후 레벨 내림차순 정렬
- *  2) targetPartyCount = partySize / 4, 이를 상한으로 사용
- *  3) 서포터를 원정대별로 중복 안 되게 최대 targetPartyCount 만큼 선택해 각 파티에 배치
- *  4) 딜러는 snake-draft로 파티에 배정하되, 이미 같은 원정대 캐릭이 있는 파티는 건너뜀
- *     - 배정 불가(모든 파티에 해당 원정대가 이미 있음)면 '남은 캐릭터'로 보냄
- *  5) 각 파티가 딜러 3명을 채울 때까지 반복
- *  6) 서포터 부족 파티는 별도로 '⚠ 서포터 부족' 표시
+ * 여러 공격대 생성:
+ *  - 남은 후보로 다음 공격대 계속 만들기
+ *  - 한 공격대의 파티를 단 하나도 못 만들면 종료
+ *
+ * 전투력 0인 캐릭터 처리:
+ *  - 전투력 못 받아온 캐릭은 아이템 레벨 * 2 를 임시값으로 사용 (대략적 비례)
+ *  - UI에서는 해당 캐릭 칩에 ⚠ 표시
  */
 function buildParties(raid) {
   const allChars = getAllCharacters();
@@ -196,151 +266,143 @@ function buildParties(raid) {
     c.level >= raid.minLevel && c.level < raid.maxLevel
   );
 
-  const dealers = candidates.filter(c => !c.isSupport)
-    .sort((a, b) => b.level - a.level);
-  const supports = candidates.filter(c => c.isSupport)
-    .sort((a, b) => b.level - a.level);
+  // 전투력 없으면 템레벨 기반 임시값 사용
+  const powerOf = (c) => c.combatPower > 0 ? c.combatPower : c.level * 2;
 
-  // 4인 파티 단위 목표 개수
   const partySize = raid.partySize || 8;
-  const targetPartyCount = Math.max(1, Math.floor(partySize / 4));
-  const DEALERS_PER_PARTY = 3;
+  const partiesPerGroup = Math.max(1, Math.floor(partySize / 4)); // 공격대당 4인 파티 수
 
-  // 파티 인스턴스 (서포터 우선 배치)
-  const parties = [];
+  const raidGroups = []; // [{ parties: [...] }, ...]
+  const usedIds = new Set();
 
-  // ─── 1단계: 서포터 배치 (원정대 중복 방지) ───
-  const usedRosters = []; // 각 파티가 포함한 rosterRep 집합
-  const usedSupportIds = new Set();
+  // 공격대를 반복 생성
+  while (true) {
+    // 남은 후보
+    const remaining = candidates.filter(c => !usedIds.has(c.id));
+    const remDealers = remaining.filter(c => !c.isSupport)
+      .sort((a, b) => powerOf(b) - powerOf(a));
+    const remSupports = remaining.filter(c => c.isSupport)
+      .sort((a, b) => powerOf(b) - powerOf(a));
 
-  for (let i = 0; i < targetPartyCount; i++) {
-    // 아직 사용되지 않은 원정대의 서포터 중 가장 레벨 높은 사람 선택
-    const picked = supports.find(s => {
-      if (usedSupportIds.has(s.id)) return false;
-      // 기존 파티들에서 이미 이 원정대가 사용됐는지 확인(현재는 파티가 하나씩 생기므로 단순 중복체크)
-      // 서포터끼리 원정대 중복도 방지 (같은 원정대 서포터가 여러 파티에 나뉘는 건 OK)
-      return true;
-    });
-    if (!picked) break;
-    usedSupportIds.add(picked.id);
-    parties.push({
-      members: [picked],
-      support: picked,
-      dealers: [],
-      hasSupport: true,
-      rosterSet: new Set([picked.rosterRep]),
-    });
-    usedRosters.push(picked.rosterRep);
-  }
+    // 이번 공격대 파티들
+    const groupParties = [];
+    const groupUsedIds = new Set();
 
-  // 서포터 부족으로 파티가 부족하면, 딜러 4명짜리 "서포터 부족" 파티를 추가로 만들 준비
-  // (여기선 아직 안 만들고, 딜러 배정 끝난 뒤 남은 딜러로 만든다)
-  const supportShortParties = targetPartyCount - parties.length;
+    // 1) 서포터를 각 파티에 1명씩 배치
+    for (let i = 0; i < partiesPerGroup; i++) {
+      const picked = remSupports.find(s => !groupUsedIds.has(s.id));
+      if (!picked) break;
+      groupUsedIds.add(picked.id);
+      groupParties.push({
+        members: [picked],
+        support: picked,
+        dealers: [],
+        hasSupport: true,
+        rosterSet: new Set([picked.rosterRep]),
+      });
+    }
 
-  // ─── 2단계: 딜러 snake-draft 배정, 단 원정대 중복 제한 ───
-  // partyCount == 0 이면 건너뜀 (아래에서 다시 처리)
-  const usedDealerIds = new Set();
-  if (parties.length > 0) {
-    // snake-draft 순서: [0,1,...,n-1, n-1,...,0, 0,...,n-1, ...]
-    // 각 파티가 DEALERS_PER_PARTY 명 될 때까지
-    const n = parties.length;
-    let direction = 1;
-    let idx = 0;
-    let round = 0;
-    const maxRounds = DEALERS_PER_PARTY * 2 + 2; // 안전장치
+    const supportShort = partiesPerGroup - groupParties.length;
 
-    while (round < maxRounds) {
-      let assignedInThisRound = 0;
-      for (let step = 0; step < n; step++) {
-        const party = parties[idx];
-        if (party.dealers.length < DEALERS_PER_PARTY) {
-          // 이 파티에 들어갈 수 있는 딜러 찾기
-          const picked = pickDealerForParty(dealers, usedDealerIds, party.rosterSet);
-          if (picked) {
-            usedDealerIds.add(picked.id);
-            party.dealers.push(picked);
-            party.members.push(picked);
-            party.rosterSet.add(picked.rosterRep);
-            assignedInThisRound++;
+    // 2) 딜러 snake-draft (전투력 내림차순 기준, 원정대 중복 금지)
+    if (groupParties.length > 0) {
+      const n = groupParties.length;
+      let direction = 1, idx = 0, round = 0;
+      const maxRounds = 10;
+      while (round < maxRounds) {
+        let assignedInRound = 0;
+        for (let step = 0; step < n; step++) {
+          const party = groupParties[idx];
+          if (party.dealers.length < 3) {
+            const picked = pickDealerForParty(remDealers, groupUsedIds, party.rosterSet);
+            if (picked) {
+              groupUsedIds.add(picked.id);
+              party.dealers.push(picked);
+              party.members.push(picked);
+              party.rosterSet.add(picked.rosterRep);
+              assignedInRound++;
+            }
+          }
+          if (direction === 1) {
+            if (idx === n - 1) direction = -1; else idx++;
+          } else {
+            if (idx === 0) direction = 1; else idx--;
           }
         }
-        // 다음 인덱스 (snake)
-        if (direction === 1) {
-          if (idx === n - 1) { direction = -1; }
-          else idx++;
+        if (groupParties.every(p => p.dealers.length >= 3)) break;
+        if (assignedInRound === 0) break;
+        round++;
+      }
+    }
+
+    // 3) 서포터 부족 파티: 남은 딜러 4명으로 채우기
+    const noSupportParties = [];
+    if (supportShort > 0) {
+      for (let p = 0; p < supportShort; p++) {
+        const partyRosters = new Set();
+        const partyMembers = [];
+        for (const d of remDealers) {
+          if (groupUsedIds.has(d.id)) continue;
+          if (partyRosters.has(d.rosterRep)) continue;
+          partyMembers.push(d);
+          partyRosters.add(d.rosterRep);
+          groupUsedIds.add(d.id);
+          if (partyMembers.length >= 4) break;
+        }
+        if (partyMembers.length >= 4) {
+          noSupportParties.push({
+            members: partyMembers,
+            support: null,
+            dealers: partyMembers,
+            hasSupport: false,
+            rosterSet: partyRosters,
+          });
         } else {
-          if (idx === 0) { direction = 1; }
-          else idx--;
+          partyMembers.forEach(m => groupUsedIds.delete(m.id));
+          break;
         }
       }
-      // 모든 파티가 다 찼으면 종료
-      if (parties.every(p => p.dealers.length >= DEALERS_PER_PARTY)) break;
-      // 한 라운드에 한 명도 못 넣었으면 종료 (더 넣을 수 없음)
-      if (assignedInThisRound === 0) break;
-      round++;
     }
+
+    const allGroupParties = [...groupParties, ...noSupportParties].map(p => ({
+      ...p,
+      rosterSet: undefined,
+      avgLevel: p.members.reduce((s, m) => s + m.level, 0) / p.members.length,
+      avgPower: p.members.reduce((s, m) => s + powerOf(m), 0) / p.members.length,
+    }));
+
+    // 이번 공격대에 파티가 하나도 생성되지 않았으면 종료
+    if (allGroupParties.length === 0) break;
+
+    raidGroups.push({ parties: allGroupParties });
+
+    // 이번 공격대에서 쓴 ID를 전체 usedIds에 누적
+    groupUsedIds.forEach(id => usedIds.add(id));
+
+    // 무한루프 방지: 파티가 하나라도 생겼지만 완전한 공격대가 안 됐고, 다음에도 못 만들 것 같으면 종료
+    // 위에서 이미 "한 파티도 못 만들면 break"이라 충분하지만, 추가 안전장치:
+    if (raidGroups.length > 50) break; // 50공격대 이상은 비정상
   }
 
-  // ─── 3단계: 서포터 부족 파티 (남은 딜러 4명씩) ───
-  // 단, 원정대 중복 제약 유지
-  const noSupportParties = [];
-  if (supportShortParties > 0) {
-    for (let p = 0; p < supportShortParties; p++) {
-      const partyRosters = new Set();
-      const partyMembers = [];
-      // 가장 레벨 높은 미사용 딜러부터 순회, 원정대 중복 안 되면 추가
-      for (const d of dealers) {
-        if (usedDealerIds.has(d.id)) continue;
-        if (partyRosters.has(d.rosterRep)) continue;
-        partyMembers.push(d);
-        partyRosters.add(d.rosterRep);
-        usedDealerIds.add(d.id);
-        if (partyMembers.length >= 4) break;
-      }
-      if (partyMembers.length >= 4) {
-        noSupportParties.push({
-          members: partyMembers,
-          support: null,
-          dealers: partyMembers,
-          hasSupport: false,
-          rosterSet: partyRosters,
-        });
-      } else {
-        // 4명을 못 채우면 그대로 두고 종료 (나머지는 leftover로)
-        // 이미 추가한 것들도 다시 사용 가능하도록 되돌림
-        partyMembers.forEach(m => usedDealerIds.delete(m.id));
-        break;
-      }
-    }
-  }
-
-  // ─── 4단계: 남은 캐릭터 (배정 안 된 딜러/서포터) ───
-  const leftoverDealers = dealers.filter(d => !usedDealerIds.has(d.id));
-  const leftoverSupports = supports.filter(s => !usedSupportIds.has(s.id));
-
-  // 평균 계산
-  const allParties = [...parties, ...noSupportParties].map(p => ({
-    ...p,
-    // rosterSet은 직렬화 필요 없으므로 제거
-    rosterSet: undefined,
-    avgLevel: p.members.length > 0
-      ? p.members.reduce((s, m) => s + m.level, 0) / p.members.length
-      : 0,
-  }));
+  // 남은 캐릭터
+  const leftoverAll = candidates.filter(c => !usedIds.has(c.id));
+  const leftoverDealers = leftoverAll.filter(c => !c.isSupport).sort((a, b) => powerOf(b) - powerOf(a));
+  const leftoverSupports = leftoverAll.filter(c => c.isSupport).sort((a, b) => powerOf(b) - powerOf(a));
 
   return {
-    parties: allParties,
+    raidGroups,
     leftoverDealers,
     leftoverSupports,
     totalCandidates: candidates.length,
-    targetPartyCount,
+    partiesPerGroup,
   };
 }
 
 /**
- * 딜러 목록에서 이 파티에 넣을 수 있는 최상위 레벨 딜러를 고른다.
+ * 딜러 목록에서 이 파티에 넣을 수 있는 최상위 딜러를 고른다.
  * - 이미 사용된 딜러 제외
  * - 이미 파티에 같은 원정대 캐릭이 있으면 제외
+ * - dealers는 이미 전투력 내림차순 정렬되어 있어야 함
  */
 function pickDealerForParty(dealers, usedDealerIds, partyRosterSet) {
   for (const d of dealers) {

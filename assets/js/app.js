@@ -39,7 +39,9 @@ function initEventListeners() {
     btn.disabled = true;
     btn.textContent = '불러오는 중...';
     try {
-      await addRoster(name);
+      await addRoster(name, (current, total, msg) => {
+        btn.textContent = total > 1 ? `${current}/${total} ${msg}` : msg;
+      });
       input.value = '';
       renderRosters();
       renderRaids();
@@ -60,10 +62,13 @@ function initEventListeners() {
   $('#refresh-all-btn').addEventListener('click', async () => {
     const btn = $('#refresh-all-btn');
     btn.disabled = true;
-    btn.textContent = '새로고침 중...';
     try {
-      for (const r of [...state.rosters]) {
-        await refreshRoster(r.repName);
+      const total = state.rosters.length;
+      for (let i = 0; i < state.rosters.length; i++) {
+        const r = state.rosters[i];
+        await refreshRoster(r.repName, (cur, tot, msg) => {
+          btn.textContent = `[${i+1}/${total}] ${cur}/${tot} ${msg}`;
+        });
       }
       renderRosters();
       renderRaids();
@@ -149,11 +154,13 @@ function renderRosters() {
     const chars = r.characters.slice().sort((a, b) => b.level - a.level);
     const charRows = chars.map(c => {
       const excluded = state.excludedChars.has(c.id);
+      const cp = c.combatPower > 0 ? c.combatPower.toLocaleString() : '-';
       return `
         <tr class="${excluded ? 'excluded' : ''}">
           <td class="name-cell">${escapeHtml(c.name)}</td>
           <td class="class-cell ${c.isSupport ? 'is-support' : ''}">${escapeHtml(c.className)}</td>
           <td class="level-cell">${c.level.toFixed(2)}</td>
+          <td class="power-cell">${cp}</td>
           <td class="exclude-cell">
             <label><input type="checkbox" data-char-id="${c.id}" class="exclude-checkbox" ${excluded ? 'checked' : ''}> 제외</label>
           </td>
@@ -171,7 +178,7 @@ function renderRosters() {
           </div>
         </div>
         <table class="char-table">
-          <thead><tr><th>캐릭명</th><th>직업</th><th>템렙</th><th></th></tr></thead>
+          <thead><tr><th>캐릭명</th><th>직업</th><th>템렙</th><th>전투력</th><th></th></tr></thead>
           <tbody>${charRows}</tbody>
         </table>
       </div>
@@ -290,10 +297,12 @@ function renderRaids() {
   // 중복 배정 집계 (파티에 실제로 들어간 캐릭만)
   charAssignmentMap = {};
   for (const { raid, result } of raidsWithData) {
-    for (const party of result.parties) {
-      for (const member of party.members) {
-        if (!charAssignmentMap[member.id]) charAssignmentMap[member.id] = [];
-        charAssignmentMap[member.id].push(raid.name);
+    for (const group of result.raidGroups) {
+      for (const party of group.parties) {
+        for (const member of party.members) {
+          if (!charAssignmentMap[member.id]) charAssignmentMap[member.id] = [];
+          charAssignmentMap[member.id].push(raid.name);
+        }
       }
     }
   }
@@ -335,29 +344,47 @@ function renderRaids() {
 }
 
 function renderRaidCard(raid, result) {
-  const { parties, leftoverDealers, leftoverSupports, totalCandidates, targetPartyCount } = result;
+  const { raidGroups, leftoverDealers, leftoverSupports, totalCandidates, partiesPerGroup } = result;
 
-  const partiesHtml = parties.map((party, i) => {
-    const membersHtml = party.members.map(m => renderCharChip(m)).join('');
-    const avgDisplay = party.avgLevel.toFixed(2);
-    const warningHtml = !party.hasSupport
-      ? '<div class="party-warning">⚠ 서포터 부족</div>' : '';
-    // 인원 미달 경고
-    const isPartyFull = party.members.length >= 4;
-    const shortageHtml = !isPartyFull
-      ? `<div class="party-warning">⚠ 인원 미달 (${party.members.length}/4) - 같은 원정대 캐릭은 1명만 가능</div>`
-      : '';
+  // 총 파티 수 집계
+  const totalParties = raidGroups.reduce((sum, g) => sum + g.parties.length, 0);
+
+  // 공격대별 렌더링
+  const groupsHtml = raidGroups.map((group, gi) => {
+    const partiesHtml = group.parties.map((party, pi) => {
+      const membersHtml = party.members.map(m => renderCharChip(m)).join('');
+      const avgPower = party.avgPower.toFixed(0);
+      const avgLevel = party.avgLevel.toFixed(2);
+      const warningHtml = !party.hasSupport
+        ? '<div class="party-warning">⚠ 서포터 부족</div>' : '';
+      const isPartyFull = party.members.length >= 4;
+      const shortageHtml = !isPartyFull
+        ? `<div class="party-warning">⚠ 인원 미달 (${party.members.length}/4)</div>`
+        : '';
+      return `
+        <div class="party-card ${!party.hasSupport ? 'no-support' : ''} ${!isPartyFull ? 'incomplete' : ''}">
+          <div class="party-header">
+            <span class="party-label">파티 ${pi + 1}</span>
+            <span class="party-avg"><span class="party-avg-power">⚔ ${avgPower}</span> <span class="party-avg-level">Lv ${avgLevel}</span></span>
+          </div>
+          ${warningHtml}
+          ${shortageHtml}
+          <div class="party-members drop-zone" data-raid-id="${raid.id}" data-group-index="${gi}" data-party-index="${pi}">
+            ${membersHtml}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // 공격대 헤더 (8인 레이드면 '공격대 N', 4인 레이드면 '파티 N'으로 표시)
+    const groupLabel = partiesPerGroup > 1
+      ? `공격대 ${gi + 1}`
+      : `파티 ${gi + 1}`;
+
     return `
-      <div class="party-card ${!party.hasSupport ? 'no-support' : ''} ${!isPartyFull ? 'incomplete' : ''}">
-        <div class="party-header">
-          <span class="party-label">파티 ${i + 1}</span>
-          <span class="party-avg">평균 ${avgDisplay}</span>
-        </div>
-        ${warningHtml}
-        ${shortageHtml}
-        <div class="party-members drop-zone" data-raid-id="${raid.id}" data-party-index="${i}">
-          ${membersHtml}
-        </div>
+      <div class="raid-group">
+        ${raidGroups.length > 1 ? `<div class="raid-group-header">${groupLabel}</div>` : ''}
+        <div class="parties-grid">${partiesHtml}</div>
       </div>
     `;
   }).join('');
@@ -373,6 +400,7 @@ function renderRaidCard(raid, result) {
 
   const isCustom = raid.category === '커스텀';
   const overrideNotice = state.raidOverrides[raid.id] ? ' (수정됨)' : '';
+  const groupTypeLabel = partiesPerGroup > 1 ? '공격대' : '파티';
 
   return `
     <article class="raid-card" data-raid-id="${raid.id}">
@@ -382,14 +410,14 @@ function renderRaidCard(raid, result) {
           <span class="raid-range">${raid.partySize}인 · ${raid.minLevel} ~ ${(raid.maxLevel - 0.01).toFixed(0)}${overrideNotice}</span>
         </div>
         <div class="raid-meta">
-          <span class="raid-count">후보 ${totalCandidates}명 · 파티 ${parties.length}/${targetPartyCount}개</span>
+          <span class="raid-count">후보 ${totalCandidates}명 · ${groupTypeLabel} ${raidGroups.length}개 · 파티 ${totalParties}개</span>
           <button class="btn-xs" data-edit-raid="${raid.id}">레벨수정</button>
           <button class="btn-xs" data-reassign="${raid.id}">재배치</button>
           ${isCustom ? `<button class="btn-xs btn-danger" data-delete-raid="${raid.id}">삭제</button>` : ''}
         </div>
       </header>
-      ${parties.length > 0
-        ? `<div class="parties-grid">${partiesHtml}</div>`
+      ${raidGroups.length > 0
+        ? groupsHtml
         : '<p class="empty-msg-small">매칭 가능한 파티가 없습니다.</p>'}
       ${leftoverHtml}
     </article>
@@ -404,20 +432,27 @@ function renderCharChip(char) {
   const badge = isDup
     ? `<span class="chip-dup-badge" title="${escapeHtml(assignedRaids.join(', '))}">×${dupCount}</span>`
     : '';
+  const hasPower = char.combatPower > 0;
+  const powerDisplay = hasPower ? char.combatPower.toLocaleString() : '?';
+  const noPowerWarn = !hasPower ? '<span class="chip-no-power" title="전투력 정보 없음 (템렙 기반으로 계산)">?</span>' : '';
   const tooltipTitle = isDup
     ? `이 캐릭터는 ${dupCount}개 레이드에 배정됨:\n- ${assignedRaids.join('\n- ')}`
-    : `[${char.rosterRep}] 원정대`;
+    : `[${char.rosterRep}] 원정대${hasPower ? '' : ' · 전투력 정보 없음'}`;
   return `
     <div class="char-chip ${supportClass} ${isDup ? 'is-duplicate' : ''}"
          draggable="true"
          data-char-id="${char.id}"
          data-char-level="${char.level}"
+         data-combat-power="${char.combatPower || 0}"
          data-is-support="${char.isSupport}"
          data-roster-rep="${escapeHtml(char.rosterRep)}"
          title="${escapeHtml(tooltipTitle)}">
       <span class="chip-name">${escapeHtml(char.name)}${badge}</span>
       <span class="chip-class">${escapeHtml(char.className)}</span>
-      <span class="chip-level">${char.level.toFixed(2)}</span>
+      <span class="chip-stats">
+        <span class="chip-power">⚔ ${powerDisplay}${noPowerWarn}</span>
+        <span class="chip-level">Lv ${char.level.toFixed(2)}</span>
+      </span>
     </div>
   `;
 }
@@ -466,16 +501,22 @@ function handleDragEnd(evt, raidId) {
     const partyCard = zone.closest('.party-card');
     if (!partyCard) return;
 
-    let sum = 0, cnt = 0;
+    let sumLevel = 0, sumPower = 0, cnt = 0;
     let hasSupport = false;
     chips.forEach(chip => {
-      sum += parseFloat(chip.dataset.charLevel);
+      sumLevel += parseFloat(chip.dataset.charLevel);
+      const p = parseFloat(chip.dataset.combatPower) || 0;
+      // 전투력 0이면 템레벨*2로 폴백 (buildParties와 동일 규칙)
+      sumPower += p > 0 ? p : parseFloat(chip.dataset.charLevel) * 2;
       cnt++;
       if (chip.dataset.isSupport === 'true') hasSupport = true;
     });
-    const avg = cnt > 0 ? sum / cnt : 0;
+    const avgLevel = cnt > 0 ? sumLevel / cnt : 0;
+    const avgPower = cnt > 0 ? sumPower / cnt : 0;
     const avgEl = partyCard.querySelector('.party-avg');
-    if (avgEl) avgEl.textContent = `평균 ${avg.toFixed(2)}`;
+    if (avgEl) {
+      avgEl.innerHTML = `<span class="party-avg-power">⚔ ${avgPower.toFixed(0)}</span> <span class="party-avg-level">Lv ${avgLevel.toFixed(2)}</span>`;
+    }
 
     // 서포터 부족 경고 업데이트
     partyCard.classList.toggle('no-support', !hasSupport && cnt > 0);
