@@ -812,9 +812,8 @@ button:disabled {
 }
 
 /* ═══ 파티 그리드 ═══
-   .parties-grid: 파티 개수만큼만 컬럼 생성 (빈 칸 없음)
-   - auto-fit을 써서 아이템이 적으면 남는 공간을 현재 아이템이 나눠 가짐
-   - container query로 부모 너비 기준 최소 너비 결정
+   파티 카드는 컴팩트하게, 캐릭터는 2x2 그리드로 배치되는 카드형 디자인
+   화면 너비에 따라 가로로 여러 파티를 나란히 표시
 */
 .raid-group {
   container-type: inline-size;
@@ -822,34 +821,24 @@ button:disabled {
 
 .parties-grid {
   display: grid;
-  /* auto-fit: 빈 컬럼 없음. minmax: 최소 280px 보장. 아이템이 1개면 그 1개가 전체 차지 */
-  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  /* 파티 카드 최소 360px (캐릭 2x2 그리드 기준), 화면 넓으면 여러 개 가로로 */
+  grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr));
   gap: 14px;
   min-width: 0;
   width: 100%;
 }
 
-/* 부모 컨테이너가 넓을수록 파티 카드 최소 너비를 줄여서 더 많이 배치 */
-@container (min-width: 700px) {
+/* 컨테이너 쿼리 미지원 폴백 */
+@supports not (container-type: inline-size) {
   .parties-grid {
-    grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
-  }
-}
-@container (min-width: 1000px) {
-  .parties-grid {
-    grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
-  }
-}
-@container (min-width: 1400px) {
-  .parties-grid {
-    grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr));
   }
 }
 
-/* 컨테이너 쿼리 미지원 브라우저 폴백 */
-@supports not (container-type: inline-size) {
+/* 모바일: 무조건 1열 */
+@media (max-width: 640px) {
   .parties-grid {
-    grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+    grid-template-columns: 1fr;
   }
 }
 
@@ -988,21 +977,27 @@ button:disabled {
   transform: none;
 }
 
+/* 캐릭 카드들이 2x2 그리드로 배치 */
 .party-members {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  min-height: 60px;
+}
+.drop-zone.manual-zone { min-height: 80px; }
+
+/* 인원이 4명 이하면 빈 칸도 시각적으로 보존 (정렬 안 깨지게) */
+.party-members.empty-shown::after {
+  content: '';
+}
+
+/* ═══ 캐릭터 카드 (2x2 그리드 셀) ═══ */
+.char-chip {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  min-height: 32px;
-}
-.drop-zone.manual-zone { min-height: 44px; }
-
-/* ═══ 캐릭터 칩 ═══ */
-.char-chip {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: baseline;
-  gap: 8px;
-  padding: 7px 10px;
+  justify-content: center;
+  gap: 2px;
+  padding: 8px 10px;
   background: var(--bg-surface-2);
   border: 1px solid var(--border-subtle);
   border-left: 3px solid var(--dmg-primary);
@@ -1016,6 +1011,8 @@ button:disabled {
     box-shadow 0.2s;
   user-select: none;
   position: relative;
+  min-height: 56px;
+  overflow: hidden;
 }
 .char-chip::before {
   content: '';
@@ -1030,42 +1027,48 @@ button:disabled {
 }
 .char-chip.support {
   border-left-color: var(--sup-primary);
-  background: linear-gradient(90deg,
+  background: linear-gradient(135deg,
     var(--sup-soft) 0%,
-    var(--bg-surface-2) 50%);
+    var(--bg-surface-2) 70%);
 }
 .char-chip:hover {
   border-color: var(--amber-soft);
-  transform: translateX(3px);
+  transform: translateY(-1px);
   box-shadow: var(--shadow-sm);
   z-index: 5;
 }
 .char-chip:active { cursor: grabbing; }
 
-.chip-name {
-  font-weight: 600;
-  color: var(--text-primary);
-  font-size: 12.5px;
+/* 직업명 (가장 위, 작게) */
+.chip-class {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  letter-spacing: 0.5px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  letter-spacing: 0.1px;
-  min-width: 0;
-}
-.chip-class {
-  color: var(--text-tertiary);
-  font-size: 10.5px;
-  font-family: 'Cormorant Garamond', serif;
-  font-style: italic;
-  letter-spacing: 0.4px;
-  white-space: nowrap;
-  flex-shrink: 0;
+  line-height: 1.2;
 }
 .char-chip.support .chip-class {
   color: var(--sup-primary);
-  font-weight: 500;
+  font-weight: 600;
 }
 
+/* 캐릭명 (메인) */
+.chip-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -0.1px;
+  line-height: 1.25;
+}
+
+/* 전투력 + 템렙 (한 줄) */
 .chip-stats {
   display: flex;
   flex-direction: row;
@@ -1073,33 +1076,32 @@ button:disabled {
   gap: 6px;
   font-family: 'Cormorant Garamond', serif;
   font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
   white-space: nowrap;
+  overflow: hidden;
+  margin-top: 1px;
 }
 .chip-power {
   font-weight: 600;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--amber-bright);
-  white-space: nowrap;
   letter-spacing: -0.2px;
 }
 .chip-level {
-  font-size: 10px;
+  font-size: 9.5px;
   color: var(--text-quaternary);
   font-style: italic;
-  white-space: nowrap;
 }
 .chip-no-power {
   display: inline-block;
-  margin-left: 3px;
-  padding: 0 4px;
+  margin-left: 2px;
+  padding: 0 3px;
   background: var(--warn);
   color: #1a1100;
-  font-size: 8.5px;
+  font-size: 8px;
   font-weight: 700;
   font-family: 'Pretendard', sans-serif;
   font-style: normal;
-  border-radius: 6px;
+  border-radius: 4px;
   cursor: help;
   vertical-align: middle;
 }
@@ -1163,19 +1165,17 @@ button:disabled {
   text-transform: none;
 }
 .leftover-zone {
-  display: flex !important;
-  flex-direction: row;
-  flex-wrap: wrap;
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 6px;
   padding: 10px;
   background: var(--bg-deepest);
   border: 1px dashed var(--border-subtle);
   border-radius: var(--radius-sm);
-  min-height: 48px;
+  min-height: 60px;
 }
 .leftover-zone .char-chip {
-  flex: 0 1 auto;
-  min-width: 220px;
+  min-width: 0;
   max-width: 100%;
 }
 
@@ -1245,13 +1245,102 @@ button:disabled {
     transparent 100%);
 }
 
-/* ═══ 모바일 반응 ═══ */
-@media (max-width: 640px) {
-  .container { padding: 14px; gap: 18px; }
+/* ═══ 반응형: 태블릿 (1100px 이하) ═══ */
+@media (max-width: 1100px) {
+  .header-inner { padding: 0 20px; }
+  .container { padding: 20px; gap: 18px; }
+  .sidebar { position: static; max-height: none; }
+}
+
+/* ═══ 반응형: 작은 노트북/큰 모바일 (768px 이하) ═══ */
+@media (max-width: 768px) {
+  .container { padding: 16px; gap: 16px; }
   .raid-card { padding: 16px; }
-  .site-title { font-size: 26px; }
+  .raid-header { gap: 8px; margin-bottom: 12px; padding-bottom: 10px; }
+  .raid-title { font-size: 18px; }
+  .raid-range { font-size: 11px; }
+  .raid-meta { gap: 4px; }
+  .raid-count { font-size: 10px; margin-right: 0; width: 100%; }
   .category-title { font-size: 22px; }
-  .raid-title { font-size: 19px; }
+  .panel { padding: 14px; }
+  .panel h2 { font-size: 13px; padding-bottom: 10px; margin-bottom: 12px; }
+
+  /* 헤더 */
+  .site-header { padding: 20px 0 16px; }
+  .header-inner { flex-direction: column; align-items: stretch; gap: 12px; }
+  .site-title { font-size: 22px; }
+  .site-title .sub { font-size: 10px; padding-left: 24px; margin-top: 6px; }
+  .header-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .header-actions button { font-size: 11px; padding: 6px 10px; }
+
+  /* 파티 카드 컴팩트화 */
+  .party-card { padding: 10px; }
+  .party-header { padding-bottom: 6px; margin-bottom: 8px; }
+  .party-avg-power { font-size: 14px; }
+  .editable-label { min-width: 80px; }
+
+  /* 캐릭 카드 더 컴팩트 */
+  .char-chip { padding: 6px 8px; min-height: 50px; }
+  .chip-name { font-size: 12px; }
+  .chip-class { font-size: 9px; }
+  .chip-power { font-size: 11px; }
+  .chip-level { font-size: 9px; }
+}
+
+/* ═══ 반응형: 모바일 (640px 이하) ═══ */
+@media (max-width: 640px) {
+  body { font-size: 13px; }
+  .container { padding: 12px; gap: 14px; }
+  .raid-card { padding: 12px; margin-bottom: 12px; border-radius: 6px; }
+  .raid-header { flex-direction: column; align-items: stretch; }
+  .raid-meta { justify-content: flex-start; }
+
+  .site-title { font-size: 20px; }
+  .category-title { font-size: 18px; padding-bottom: 8px; margin-bottom: 14px; }
+
+  .parties-grid { grid-template-columns: 1fr; gap: 10px; }
+
+  /* 파티 카드 헤더 모바일에서 세로 배치 */
+  .party-header { flex-direction: column; align-items: stretch; gap: 4px; }
+  .party-avg { justify-content: flex-end; }
+  .editable-label { width: 100%; min-width: 0; }
+
+  /* 캐릭 카드는 여전히 2x2 유지 */
+  .party-members { gap: 5px; }
+  .char-chip { padding: 6px 7px; min-height: 46px; }
+  .chip-name { font-size: 11.5px; }
+  .chip-class { font-size: 9px; }
+  .chip-power { font-size: 11px; }
+  .chip-level { font-size: 8.5px; }
+
+  /* 남은 캐릭 영역 */
+  .leftover-zone { grid-template-columns: 1fr 1fr; }
+
+  /* 사이드바 패널 */
+  .panel { padding: 12px; border-radius: 6px; }
+  .panel h2 { font-size: 12px; }
+  .raid-selector-wrap { max-height: 280px; }
+  .roster-card { padding: 10px; }
+  .roster-header h3 { font-size: 15px; }
+  .roster-actions button { padding: 4px 7px; font-size: 10px; }
+  .char-table { font-size: 11px; }
+  .char-table th { font-size: 9px; padding: 6px 3px 4px; }
+  .char-table td { padding: 5px 3px; }
+
+  /* 토스트 모바일 위치 */
+  .toast { left: 16px; right: 16px; bottom: 16px; transform: translateY(20px); }
+  .toast.show { transform: translateY(0); }
+}
+
+/* ═══ 반응형: 매우 작은 화면 (380px 이하) ═══ */
+@media (max-width: 380px) {
+  /* 캐릭 카드 1열로 (2x2 너무 좁음) */
+  .party-members { grid-template-columns: 1fr; }
+  .leftover-zone { grid-template-columns: 1fr; }
+  .char-chip { min-height: 44px; }
 }
 
 /* ═══════════════════════════════════════
@@ -1338,3 +1427,4 @@ button:disabled {
   transform: none;
   border-color: var(--border-subtle);
 }
+
