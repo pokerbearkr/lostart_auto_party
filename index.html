@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>로스트아크 파티 매칭 도구</title>
+  <meta name="description" content="원정대 캐릭터를 레이드별 아이템 레벨 구간에 맞춰 자동으로 파티 편성하는 도구" />
+  <link rel="stylesheet" href="assets/css/style.css" />
+</head>
+<body class="page-main">
+  <header class="site-header">
+    <div class="header-inner">
+      <h1 class="site-title">
+        LOSTARK PARTY MATCHER
+        <span class="sub">원정대 기반 자동 파티 편성</span>
+      </h1>
+      <div class="header-actions">
+        <button id="snapshot-share-btn" class="btn-sm btn-primary" title="현재 파티 편성을 스냅샷 링크로 만들어 친구에게 공유">📸 스냅샷 공유</button>
+        <button id="refresh-all-btn" class="btn-ghost btn-sm">전체 새로고침</button>
+        <a href="manage.html" class="btn-sm" style="text-decoration:none; display:inline-block;">⚙ 관리</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="container container-wide">
+    <section class="main">
+      <div id="raids-list">
+        <p class="empty-msg">
+          왼쪽 위 <strong>⚙ 관리</strong> 버튼에서 API 키를 등록하고 원정대를 추가하세요.<br />
+          이후 레이드를 선택하면 자동 파티 편성이 여기에 표시됩니다.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>로스트아크 Open API 기반 · 본 도구는 Smilegate RPG와 무관한 팬메이드 프로젝트입니다.</p>
+  </footer>
+
+  <!-- SortableJS (CDN): 드래그 앤 드롭 파티 이동 -->
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+
+  <!-- 앱 스크립트 (순서 중요) -->
+  <script src="assets/js/raids.js"></script>
+  <script src="assets/js/core.js"></script>
+  <script src="assets/js/app.js"></script>
+</body>
+</html>

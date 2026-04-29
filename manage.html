@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>관리 · 로스트아크 파티 매칭 도구</title>
+  <link rel="stylesheet" href="assets/css/style.css" />
+</head>
+<body class="page-manage">
+  <header class="site-header">
+    <div class="header-inner">
+      <h1 class="site-title">
+        ⚙ MANAGE
+        <span class="sub">API 키 · 원정대 · 레이드 설정</span>
+      </h1>
+      <div class="header-actions">
+        <a href="index.html" class="btn-sm btn-primary" style="text-decoration:none; display:inline-block;">← 파티 편성으로</a>
+        <button id="clear-all-btn" class="btn-ghost btn-sm btn-danger">전체 초기화</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container container-narrow">
+    <!-- 탭 네비게이션 -->
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="api">🔑 API 키</button>
+      <button class="tab-btn" data-tab="rosters">👥 원정대 / 캐릭터</button>
+      <button class="tab-btn" data-tab="raids">⚔ 레이드 선택</button>
+    </nav>
+
+    <!-- 탭 내용들 -->
+    <div class="tab-content-wrap">
+
+      <!-- ── 탭 1: API 키 ── -->
+      <section class="tab-content active" data-tab-content="api">
+        <div class="panel">
+          <h2>API 키 설정</h2>
+          <div class="input-row">
+            <input id="api-key-input" type="password" placeholder="로스트아크 Open API 키" />
+            <button id="api-key-save" class="btn-primary">저장</button>
+          </div>
+          <div id="api-key-status" class="api-status empty">○ API 키 미설정</div>
+          <button id="share-link-btn" class="btn-sm btn-ghost" style="width:100%; margin-top:8px;" title="친구에게 이 키와 함께 사이트를 공유할 링크를 클립보드에 복사">🔗 공유 링크 복사</button>
+          <p class="help-text">
+            키 발급: <a href="https://developer-lostark.game.onstove.com" target="_blank" rel="noopener">developer-lostark.game.onstove.com</a><br />
+            로스트아크 선택 → 무료 발급 → 여기에 붙여넣기.<br />
+            키는 브라우저(localStorage)에만 저장됩니다.<br />
+            <span style="color: var(--text-quaternary); font-size: 11px;">URL 파라미터 <code style="font-family: monospace; font-size: 10px; color: var(--amber);">?k=XXX</code>로 전달되면 자동 적용됩니다.</span>
+          </p>
+        </div>
+      </section>
+
+      <!-- ── 탭 2: 원정대/캐릭터 ── -->
+      <section class="tab-content" data-tab-content="rosters">
+        <div class="panel">
+          <h2>원정대 등록</h2>
+          <div class="input-row">
+            <input id="roster-name-input" type="text" placeholder="원정대 대표 캐릭명 (아무 캐릭 하나)" />
+            <button id="add-roster-btn" class="btn-primary">원정대 추가</button>
+          </div>
+          <p class="help-text">
+            해당 캐릭터의 원정대 전체를 자동으로 불러옵니다. 여러 계정이 있다면 각각 추가하세요.
+          </p>
+        </div>
+
+        <div class="panel">
+          <h2>등록된 원정대</h2>
+          <div id="rosters-list" class="rosters-wrap">
+            <p class="empty-msg">등록된 원정대가 없습니다.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── 탭 3: 레이드 선택 ── -->
+      <section class="tab-content" data-tab-content="raids">
+        <div class="panel">
+          <h2>커스텀 레이드</h2>
+          <div style="display: flex; flex-direction: column; gap: 6px;">
+            <input id="custom-raid-name" type="text" placeholder="레이드 이름 (예: 그림자 X 노말)" />
+            <div style="display: flex; gap: 6px;">
+              <input id="custom-raid-min" type="number" step="0.01" placeholder="최소 레벨" />
+              <input id="custom-raid-max" type="number" step="0.01" placeholder="상한 (미만)" />
+            </div>
+            <select id="custom-raid-size">
+              <option value="4">4인 레이드</option>
+              <option value="8" selected>8인 레이드</option>
+            </select>
+            <button id="add-custom-raid-btn" class="btn-primary">추가</button>
+          </div>
+          <p class="help-text">
+            상한은 "이 값 미만까지 매칭"입니다. 예: 1700~1720 → 1700.00~1719.99
+          </p>
+        </div>
+
+        <div class="panel">
+          <h2>파티 짤 레이드 선택</h2>
+          <div id="raid-selector" class="raid-selector-wrap"></div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <p>로스트아크 Open API 기반 · 본 도구는 Smilegate RPG와 무관한 팬메이드 프로젝트입니다.</p>
+  </footer>
+
+  <script src="assets/js/raids.js"></script>
+  <script src="assets/js/core.js"></script>
+  <script src="assets/js/manage.js"></script>
+</body>
+</html>
